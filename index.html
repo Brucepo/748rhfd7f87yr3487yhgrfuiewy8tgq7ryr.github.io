@@ -27,15 +27,15 @@
             <div class="flex flex-col md:flex-row gap-4 items-center">
                 <div class="flex flex-col w-full md:w-32">
                     <label class="text-[10px] text-blue-400 font-bold mb-1 uppercase">玩家編號</label>
-                    <input type="number" id="targetId" min="1" max="66" placeholder="1-66" class="bg-slate-900 border-2 border-slate-700 rounded-xl h-14 text-center text-2xl font-bold input-focus">
+                    <input type="text" id="targetId" placeholder="A0001" class="bg-slate-900 border-2 border-slate-700 rounded-xl h-14 text-center text-2xl font-bold input-focus uppercase">
                 </div>
                 <div class="flex flex-col w-full md:w-40">
                     <label class="text-[10px] text-green-400 font-bold mb-1 uppercase">調整數值</label>
                     <input type="number" id="customVal" placeholder="加/減" class="bg-slate-900 border-2 border-slate-700 rounded-xl h-14 text-center text-xl font-bold input-focus">
                 </div>
                 <div class="grid grid-cols-4 gap-2 w-full md:flex-1">
-                    <button onclick="applyScore(100)" class="h-14 bg-slate-800 hover:bg-slate-700 rounded-xl font-bold border border-slate-600 transition">+100</button>
-                    <button onclick="applyScore(500)" class="h-14 bg-slate-800 hover:bg-slate-700 rounded-xl font-bold border border-slate-600 transition">+500</button>
+                    <!--<button onclick="applyScore(100)" class="h-14 bg-slate-800 hover:bg-slate-700 rounded-xl font-bold border border-slate-600 transition">+100</button>
+                    <button onclick="applyScore(500)" class="h-14 bg-slate-800 hover:bg-slate-700 rounded-xl font-bold border border-slate-600 transition">+500</button> -->
                     <button onclick="applyCustom()" class="h-14 col-span-2 bg-blue-600 hover:bg-blue-500 rounded-xl font-bold shadow-lg shadow-blue-900/20 transition text-lg text-white">執行調整</button>
                 </div>
             </div>
@@ -58,11 +58,25 @@
         <div id="boardContainer" class="space-y-3"></div>
     </div>
 
+    <!-- Score Change Log Display -->
+    <div class="max-w-4xl mx-auto px-4 mt-10 mb-10">
+        <div class="flex justify-between items-center mb-4">
+            <h3 class="text-lg font-bold">📝 分數變動紀錄</h3>
+            <div class="flex gap-2">
+                <button onclick="downloadScoreLog()" class="text-xs text-green-400 hover:text-green-300">📥 下載日誌</button>
+                <button onclick="scoreLog = []; renderScoreLog()" class="text-xs text-slate-400 hover:text-slate-200">清空顯示</button>
+            </div>
+        </div>
+        <div id="scoreLogContainer" class="bg-slate-900/40 border border-slate-800 rounded-2xl p-4 max-h-80 overflow-y-auto"></div>
+    </div>
+
     <script>
         // Set this to your local server for testing, then change to your Render/Railway URL
         //const API_URL = "http://localhost:3000/api"; 
         const API_URL = "https://server-api-host.onrender.com/api";
         let players = [];
+        let scoreLog = []; // Store score change logs
+
 
         // 1. Initial Load from MongoDB
         async function loadData() {
@@ -102,15 +116,31 @@
 
         // 3. Reset All Players
         async function resetAll() {
-            if (confirm("確定要將所有玩家分數歸零嗎？這將同步至數據庫。")) {
+            if (confirm("確定要將所有玩家分數歸零嗎？記分日誌將被下載並清空。")) {
                 try {
-                    const response = await fetch(`${API_URL}/reset`, { method: 'POST' });
-                    if (response.ok) {
-                        notify("所有分數已清空");
-                        await loadData();
+                    // First, download the log
+                    notify("正在下載記分日誌...", false);
+                    const downloadSuccess = await downloadScoreLog();
+                    
+                    if (downloadSuccess) {
+                        notify("日誌已下載，正在清空...", false);
+                        
+                        // Then clear the logs from database
+                        const clearSuccess = await clearScoreLogs();
+                        
+                        if (clearSuccess) {
+                            notify("日誌已清空，正在重置分數...", false);
+                            
+                            // Finally reset all scores
+                            const response = await fetch(`${API_URL}/reset`, { method: 'POST' });
+                            if (response.ok) {
+                                notify("✅ 所有分數已清空，日誌已下載");
+                                await loadData();
+                            }
+                        }
                     }
                 } catch (e) {
-                    notify("重置請求失敗", true);
+                    notify("重置流程失敗", true);
                 }
             }
         }
@@ -124,14 +154,80 @@
             setTimeout(() => log.classList.add('opacity-0'), 2500);
         }
 
+        // Log Score Changes
+        function recordScoreChange(playerId, scoreChange, currentTotal) {
+            const now = new Date();
+            const dateStr = now.toLocaleDateString('zh-HK');
+            const timeStr = now.toLocaleTimeString('zh-HK');
+            
+            const logEntry = {
+                date: dateStr,
+                time: timeStr,
+                playerId: String(playerId).toUpperCase(),
+                scoreChange: scoreChange > 0 ? `+${scoreChange}` : `${scoreChange}`,
+                currentTotal: currentTotal
+            };
+            
+            scoreLog.unshift(logEntry);
+            if (scoreLog.length > 100) scoreLog.pop();
+            renderScoreLog();
+            
+            // Save to MongoDB
+            saveLogToDatabase(logEntry);
+        }
+
+        // Save log to MongoDB
+        async function saveLogToDatabase(logEntry) {
+            try {
+                await fetch(`${API_URL}/log`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        date: logEntry.date,
+                        time: logEntry.time,
+                        playerId: logEntry.playerId,
+                        scoreChange: logEntry.scoreChange,
+                        currentTotal: logEntry.currentTotal
+                    })
+                });
+            } catch (error) {
+                console.error("Failed to save log to database:", error);
+            }
+        }
+
+        // Display Score Change Log
+        function renderScoreLog() {
+            const container = document.getElementById('scoreLogContainer');
+            if (!container) return;
+            
+            if (scoreLog.length === 0) {
+                container.innerHTML = `<div class="text-center text-slate-500 py-4 text-xs">尚無記錄</div>`;
+                return;
+            }
+            
+            container.innerHTML = scoreLog.map(log => {
+                const isPositive = log.scoreChange.startsWith('+');
+                const color = isPositive ? 'text-green-400' : 'text-red-400';
+                return `<div class="text-xs text-slate-300 py-1 border-b border-slate-800">
+                    ${log.date} ${log.time} | ID:${log.playerId} | <span class="${color} font-bold">${log.scoreChange}</span> | 總分:<span class="text-blue-400">${log.currentTotal}</span>
+                </div>`;
+            }).join('');
+        }
+
         function applyScore(val) {
-            const id = parseInt(document.getElementById('targetId').value);
-            const player = players.find(p => p.id === id);
+            const inputId = document.getElementById('targetId').value.trim().toUpperCase();
+            if (!inputId) {
+                notify("請輸入玩家編號", true);
+                return;
+            }
+            
+            const player = players.find(p => String(p.id).toUpperCase() === inputId);
             if (player) {
                 player.score += val;
                 player.lastUpdate = Date.now();
-                render(); // Instant visual feedback
-                syncPlayer(player); // Save to DB in background
+                recordScoreChange(player.id, val, player.score);
+                render();
+                syncPlayer(player);
                 document.getElementById('targetId').select();
             } else { 
                 notify("找不到該編號", true); 
@@ -169,7 +265,7 @@
                         <div class="score-font font-bold w-10 text-center ${rankStyle}">${rank}</div>
                         <div class="flex-1">
                             <div class="flex items-center gap-2">
-                                <span class="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded font-mono">ID:${String(p.id).padStart(2, '0')}</span>
+                                <span class="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded font-mono">ID:${String(p.id).toUpperCase()}</span>
                                 <span class="font-bold text-slate-200 ml-1">${p.name}</span>
                             </div>
                         </div>
@@ -193,9 +289,52 @@
             link.click();
         }
 
+        // Download Score Change Log from Database
+        async function downloadScoreLog() {
+            try {
+                const response = await fetch(`${API_URL}/logs`);
+                const logs = await response.json();
+                
+                let csv = "日期,時間,玩家ID,分數變動,當前總分\n";
+                logs.forEach(log => {
+                    csv += `${log.date},${log.time},${log.playerId},${log.scoreChange},${log.currentTotal}\n`;
+                });
+                
+                const blob = new Blob(["\ufeff" + csv], { type: 'text/csv;charset=utf-8;' });
+                const link = document.createElement("a");
+                link.href = URL.createObjectURL(blob);
+                link.download = `分數變動紀錄_${new Date().toLocaleString('zh-HK').replace(/\//g, '-')}.csv`;
+                link.click();
+                
+                return true;
+            } catch (error) {
+                console.error("Failed to download logs:", error);
+                notify("下載日誌失敗", true);
+                return false;
+            }
+        }
+
+        // Clear All Logs from Database
+        async function clearScoreLogs() {
+            try {
+                const response = await fetch(`${API_URL}/logs/clear`, { method: 'POST' });
+                if (response.ok) {
+                    scoreLog = []; // Clear local logs
+                    renderScoreLog();
+                    return true;
+                }
+                return false;
+            } catch (error) {
+                console.error("Failed to clear logs:", error);
+                notify("清空日誌失敗", true);
+                return false;
+            }
+        }
+
         // Init
         window.onload = () => {
             loadData();
+            renderScoreLog(); // Initialize log display
             // Optional: Auto-refresh data every 10 seconds to stay in sync with other users
             setInterval(loadData, 10000);
         };
