@@ -94,15 +94,14 @@
         }
 
         // 2. Sync Single Player Update
-        async function syncPlayer(player) {
+        async function syncPlayer(player, scoreChange) { // 👈 新增 scoreChange 參數
             try {
                 const response = await fetch(`${API_URL}/update`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         id: player.id,
-                        name: player.name,
-                        score: player.score
+                        scoreChange: Number(scoreChange) // 👈 只傳送本次變動了多少分
                     })
                 });
                 const result = await response.json();
@@ -116,27 +115,27 @@
 
         // 3. Reset All Players
         async function resetAll() {
-            if (confirm("確定要將所有玩家分數歸零嗎？記分日誌將被下載並清空。")) {
+            if (confirm("⚠️ 警告：確定要將所有玩家分數歸零嗎？此操作不可逆！\n系統會先為您下載目前的記分日誌。")) {
                 try {
-                    // First, download the log
                     notify("正在下載記分日誌...", false);
                     const downloadSuccess = await downloadScoreLog();
                     
                     if (downloadSuccess) {
-                        notify("日誌已下載，正在清空...", false);
-                        
-                        // Then clear the logs from database
-                        const clearSuccess = await clearScoreLogs();
-                        
-                        if (clearSuccess) {
-                            notify("日誌已清空，正在重置分數...", false);
+                        // 👈 加入彈窗攔截防範安全鎖，確保檔案真的有出現在管理員的電腦裡
+                        if (confirm("請管理員確認：瀏覽器是否已成功彈出並「完成下載」日誌檔案？\n\n點選『確定』👉 將清空資料庫日誌並重置所有人分數為 0。\n點選『取消』👉 暫停重置流程（分數與日誌將完好無損）。")) {
+                            notify("日誌已確認，正在清空...", false);
+                            const clearSuccess = await clearScoreLogs();
                             
-                            // Finally reset all scores
-                            const response = await fetch(`${API_URL}/reset`, { method: 'POST' });
-                            if (response.ok) {
-                                notify("✅ 所有分數已清空，日誌已下載");
-                                await loadData();
+                            if (clearSuccess) {
+                                notify("日誌已清空，正在重置分數...", false);
+                                const response = await fetch(`${API_URL}/reset`, { method: 'POST' });
+                                if (response.ok) {
+                                    notify("✅ 所有分數已清空，舊日誌已安全備份並下載");
+                                    await loadData();
+                                }
                             }
+                        } else {
+                            notify("❌ 重置操作已安全取消", true);
                         }
                     }
                 } catch (e) {
@@ -164,7 +163,7 @@
                 date: dateStr,
                 time: timeStr,
                 playerId: String(playerId).toUpperCase(),
-                scoreChange: scoreChange > 0 ? `+${scoreChange}` : `${scoreChange}`,
+                scoreChange: Number(scoreChange), // 👈 強制轉為純數字型態 (正數代表加，負數代表減)
                 currentTotal: currentTotal
             };
             
@@ -206,10 +205,14 @@
             }
             
             container.innerHTML = scoreLog.map(log => {
-                const isPositive = log.scoreChange.startsWith('+');
+                // 👈 在前端渲染時，依據正負數動態決定顯示符號
+                const changeVal = Number(log.scoreChange);
+                const isPositive = changeVal > 0;
+                const displayChange = isPositive ? `+${changeVal}` : `${changeVal}`; 
                 const color = isPositive ? 'text-green-400' : 'text-red-400';
+                
                 return `<div class="text-xs text-slate-300 py-1 border-b border-slate-800">
-                    ${log.date} ${log.time} | ID:${log.playerId} | <span class="${color} font-bold">${log.scoreChange}</span> | 總分:<span class="text-blue-400">${log.currentTotal}</span>
+                    ${log.date} ${log.time} | ID:${log.playerId} | <span class="${color} font-bold">${displayChange}</span> | 總分:<span class="text-blue-400">${log.currentTotal}</span>
                 </div>`;
             }).join('');
         }
@@ -227,7 +230,7 @@
                 player.lastUpdate = Date.now();
                 recordScoreChange(player.id, val, player.score);
                 render();
-                syncPlayer(player);
+                syncPlayer(player, val);
                 document.getElementById('targetId').select();
             } else { 
                 notify("找不到該編號", true); 
@@ -236,9 +239,12 @@
 
         function applyCustom() {
             const val = parseInt(document.getElementById('customVal').value);
-            if (!isNaN(val)) { 
+            // 👈 確保數值不是 NaN 且不等於 0 才有必要執行後續邏輯
+            if (!isNaN(val) && val !== 0) { 
                 applyScore(val); 
                 document.getElementById('customVal').value = ""; 
+            } else if (val === 0) {
+                notify("調整數值不能為 0", true);
             }
         }
 
@@ -249,7 +255,7 @@
                 return;
             }
 
-            const sorted = [...players].sort((a, b) => b.score - a.score || a.id - b.id);
+            const sorted = [...players].sort((a, b) => b.score - a.score || String(a.id).localeCompare(String(b.id)));
 
             container.innerHTML = sorted.map((p, index) => {
                 const rank = index + 1;
@@ -297,7 +303,11 @@
                 
                 let csv = "日期,時間,玩家ID,分數變動,當前總分\n";
                 logs.forEach(log => {
-                    csv += `${log.date},${log.time},${log.playerId},${log.scoreChange},${log.currentTotal}\n`;
+                    // 👈 匯出 CSV 時，同樣動態幫正數加上 "+" 號
+                    const changeVal = Number(log.scoreChange);
+                    const displayChange = changeVal > 0 ? `+${changeVal}` : `${changeVal}`;
+                    
+                    csv += `${log.date},${log.time},${log.playerId},${displayChange},${log.currentTotal}\n`;
                 });
                 
                 const blob = new Blob(["\ufeff" + csv], { type: 'text/csv;charset=utf-8;' });
