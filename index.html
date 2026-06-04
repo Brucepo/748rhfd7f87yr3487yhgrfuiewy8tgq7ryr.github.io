@@ -114,15 +114,20 @@
         }
 
         // 3. Reset All Players
+        // Helper utility to create a small pause in async execution
+        const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
         async function resetAll() {
             if (confirm("⚠️ 警告：確定要將所有玩家分數歸零嗎？此操作不可逆！\n系統會先為您下載目前的記分日誌。")) {
                 try {
-                    const downloadSuccess = await downloadScoreLog();
                     notify("正在下載記分日誌...", false);
-                    
+                    const downloadSuccess = await downloadScoreLog();
                     
                     if (downloadSuccess) {
-                        // 👈 加入彈窗攔截防範安全鎖，確保檔案真的有出現在管理員的電腦裡
+                        // 💡 關鍵修正：給 Safari 500 毫秒的時間去處理下載事件並更新 UI
+                        await delay(500); 
+                        
+                        // 👈 加入彈窗攔截防範安全鎖
                         if (confirm("請管理員確認：瀏覽器是否已成功彈出並「完成下載」日誌檔案？\n\n點選『確定』👉 將清空資料庫日誌並重置所有人分數為 0。\n點選『取消』👉 暫停重置流程（分數與日誌將完好無損）。")) {
                             notify("日誌已確認，正在清空...", false);
                             const clearSuccess = await clearScoreLogs();
@@ -140,6 +145,7 @@
                         }
                     }
                 } catch (e) {
+                    console.error(e);
                     notify("重置流程失敗", true);
                 }
             }
