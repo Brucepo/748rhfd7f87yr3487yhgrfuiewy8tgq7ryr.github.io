@@ -117,8 +117,9 @@
         async function resetAll() {
             if (confirm("⚠️ 警告：確定要將所有玩家分數歸零嗎？此操作不可逆！\n系統會先為您下載目前的記分日誌。")) {
                 try {
-                    notify("正在下載記分日誌...", false);
                     const downloadSuccess = await downloadScoreLog();
+                    notify("正在下載記分日誌...", false);
+                    
                     
                     if (downloadSuccess) {
                         // 👈 加入彈窗攔截防範安全鎖，確保檔案真的有出現在管理員的電腦裡
